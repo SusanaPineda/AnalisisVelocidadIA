@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis Biomecánico - Escalada de Velocidad</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold mb-2">Análisis Biomecánico</h1>
+            <h2 class="text-2xl text-gray-400">Escalada de Velocidad</h2>
+        </header>
+
+        <!-- Upload Section -->
+        <section class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h3 class="text-2xl font-semibold mb-4">Subir Video</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium mb-2">Peso del Escalador (kg)</label>
+                    <input type="number" id="climberWeight" value="70" min="30" max="150" step="0.1"
+                           class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Seleccionar Video</label>
+                    <input type="file" id="videoFile" accept="video/*"
+                           class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500">
+                </div>
+                <button id="uploadBtn" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition">
+                    Subir y Analizar
+                </button>
+            </div>
+            <div id="uploadStatus" class="mt-4 hidden"></div>
+        </section>
+
+        <!-- Results Dashboard -->
+        <section id="resultsSection" class="hidden">
+            <!-- Metrics Table -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-6">
+                <h3 class="text-2xl font-semibold mb-4">Métricas de Rendimiento</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-gray-700">
+                            <tr>
+                                <th class="px-4 py-2">Métrica</th>
+                                <th class="px-4 py-2">Valor</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metricsTable">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Power Chart -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-6">
+                <h3 class="text-2xl font-semibold mb-4">Curva de Potencia</h3>
+                <canvas id="powerChart" class="bg-gray-900 rounded"></canvas>
+            </div>
+
+            <!-- Video Players -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-xl font-semibold mb-4">Video Original</h3>
+                    <video id="originalVideo" controls class="w-full rounded-lg"></video>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-xl font-semibold mb-4">Video Analizado</h3>
+                    <video id="analyzedVideo" controls class="w-full rounded-lg"></video>
+                </div>
+            </div>
+
+            <!-- Steps Table -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h3 class="text-2xl font-semibold mb-4">Análisis por Pasos</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-gray-700">
+                            <tr>
+                                <th class="px-4 py-2">Paso</th>
+                                <th class="px-4 py-2">Tiempo Inicio</th>
+                                <th class="px-4 py-2">Tiempo Fin</th>
+                                <th class="px-4 py-2">Duración</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stepsTable">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Loading Spinner -->
+        <div id="loadingSpinner" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-gray-800 rounded-lg p-8 text-center">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                <p class="text-xl">Procesando video...</p>
+            </div>
+        </div>
+
+        <!-- Hold Detection Modal -->
+        <div id="holdDetectionModal" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div class="bg-gray-800 rounded-lg p-6 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                <h3 class="text-2xl font-semibold mb-4">Ajustar Detección de Presas</h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Left: Image with holds -->
+                    <div>
+                        <div class="mb-4">
+                            <label class="flex items-center mb-2 cursor-pointer">
+                                <input type="checkbox" id="useRoiCheckbox" class="mr-2 w-4 h-4">
+                                <span class="text-sm">Usar Región de Interés (ROI) para mejorar detección de pose</span>
+                            </label>
+                            <p class="text-xs text-gray-400 mb-2">
+                                Si el escalador ocupa una pequeña parte del video, marca esta opción y arrastra en la imagen para seleccionar el área.
+                            </p>
+                            <div id="roiInfo" class="hidden mt-2 text-sm text-yellow-300">
+                                <strong>ROI seleccionada:</strong> <span id="roiDimensions"></span>
+                            </div>
+                        </div>
+                        
+                        <div class="relative bg-gray-900 rounded-lg overflow-hidden mb-4" style="position: relative;">
+                            <canvas id="holdCanvas" class="w-full h-auto" style="display: block; max-width: 100%;"></canvas>
+                            <p class="text-sm text-gray-400 mt-2 text-center">
+                                <span id="canvasMode">Haz clic para añadir presas</span>
+                            </p>
+                            <p class="text-xs text-gray-500 mt-1 text-center">
+                                Doble clic en una presa para marcarla como FIN
+                            </p>
+                        </div>
+                        
+                        <div class="space-y-2">
+                            <button id="clearHoldsBtn" class="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded">
+                                Limpiar Todas las Presas
+                            </button>
+                            <button id="removeLastHoldBtn" class="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded">
+                                Eliminar Última Presa
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Right: HSV Controls -->
+                    <div class="space-y-4">
+                        <div>
+                            <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 1</h4>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm mb-1">H Min: <span id="h1MinValue">0</span></label>
+                                    <input type="range" id="h1Min" min="0" max="179" value="0" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">H Max: <span id="h1MaxValue">10</span></label>
+                                    <input type="range" id="h1Max" min="0" max="179" value="10" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">S Min: <span id="s1MinValue">100</span></label>
+                                    <input type="range" id="s1Min" min="0" max="255" value="100" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">S Max: <span id="s1MaxValue">255</span></label>
+                                    <input type="range" id="s1Max" min="0" max="255" value="255" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">V Min: <span id="v1MinValue">100</span></label>
+                                    <input type="range" id="v1Min" min="0" max="255" value="100" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">V Max: <span id="v1MaxValue">255</span></label>
+                                    <input type="range" id="v1Max" min="0" max="255" value="255" class="w-full">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 2 (Rojo que envuelve)</h4>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm mb-1">H Min: <span id="h2MinValue">170</span></label>
+                                    <input type="range" id="h2Min" min="0" max="179" value="170" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">H Max: <span id="h2MaxValue">180</span></label>
+                                    <input type="range" id="h2Max" min="0" max="179" value="180" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">S Min: <span id="s2MinValue">100</span></label>
+                                    <input type="range" id="s2Min" min="0" max="255" value="100" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">S Max: <span id="s2MaxValue">255</span></label>
+                                    <input type="range" id="s2Max" min="0" max="255" value="255" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">V Min: <span id="v2MinValue">100</span></label>
+                                    <input type="range" id="v2Min" min="0" max="255" value="100" class="w-full">
+                                </div>
+                                <div>
+                                    <label class="block text-sm mb-1">V Max: <span id="v2MaxValue">255</span></label>
+                                    <input type="range" id="v2Max" min="0" max="255" value="255" class="w-full">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm mb-1">Área Mínima: <span id="minAreaValue">100</span> píxeles</label>
+                            <input type="range" id="minArea" min="50" max="1000" value="100" class="w-full">
+                        </div>
+                        
+                        <div class="flex gap-2">
+                            <button id="detectHoldsBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded">
+                                Detectar Presas
+                            </button>
+                            <button id="confirmHoldsBtn" class="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded">
+                                Confirmar y Analizar
+                            </button>
+                        </div>
+                        
+                        <div id="holdsCount" class="text-center text-gray-400 mt-2">
+                            Presas detectadas: 0
+                        </div>
+                        
+                        <div class="mt-4 p-3 bg-blue-900 bg-opacity-50 border border-blue-600 rounded text-sm">
+                            <strong class="text-blue-300">💡 Consejo:</strong> 
+                            <span class="text-blue-200">Si la detección de pose es baja, activa el Modo ROI y selecciona el área donde está el escalador para mejorar los resultados.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
