@@ -405,12 +405,15 @@ async def analyze_video_with_holds(
             print(f"ROI stored in result: {result.roi}")
         if finish_hold_index is not None:
             print(f"Finish hold index: {finish_hold_index} (hold {finish_hold_index + 1})")
-        
+
+        # Propagate climber radius so the overlay can draw the search zone
+        result.climber_radius = float(climber_point_radius)
+
         # Store result
         analysis_results[video_id] = result
-        
+
         return result
-        
+
     except Exception as e:
         import traceback
         error_detail = f"Error analyzing video: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"

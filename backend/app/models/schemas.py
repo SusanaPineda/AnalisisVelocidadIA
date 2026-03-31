@@ -77,6 +77,7 @@ class AnalysisResult(BaseModel):
     finish_hold_index: Optional[int] = None  # Index of the hold that marks the finish (None if not set)
     last_hold_reached: Optional[int] = None  # Index of the last hold the climber reached (None if no holds reached)
     roi: Optional[Tuple[int, int, int, int]] = None  # ROI used for pose detection (x, y, width, height) in original frame coordinates
+    climber_radius: Optional[float] = None  # Radius (pixels) used for climber zone filtering
 
 class ErrorResponse(BaseModel):
     """Error response"""

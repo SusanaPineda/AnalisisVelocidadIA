@@ -22,7 +22,7 @@ let colorPickMode = false; // true = próximo click en canvas toma color de pres
 let pickedColorHsv = null; // {h, s, v} de la muestra actual
 let climberPickMode = false; // true = próximo click en canvas toma punto del escalador
 let climberSelection = null; // {x, y} en coordenadas originales de la imagen
-let climberSelectionRadius = 80; // tolerancia en px (radio)
+let climberSelectionRadius = 150; // tolerancia en px (radio)
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -820,6 +820,7 @@ function setupHoldDetectionButtons(videoId, climberWeight, originalFile) {
         clearClimberSelectionBtn.addEventListener('click', () => {
             climberSelection = null;
             climberPickMode = false;
+            drawHoldsOnCanvas();
             const modeText = document.getElementById('canvasMode');
             if (modeText) {
                 modeText.textContent = roiMode ? 'Arrastra para seleccionar ROI' : 'Haz clic para añadir presas';
@@ -837,6 +838,7 @@ function setupHoldDetectionButtons(videoId, climberWeight, originalFile) {
         climberRadiusSlider.addEventListener('input', (e) => {
             climberRadiusValueEl.textContent = e.target.value;
             climberSelectionRadius = parseInt(e.target.value);
+            drawHoldsOnCanvas();
         });
     }
 }
@@ -1095,7 +1097,46 @@ function drawOverlays() {
         }
     });
     
-    // count is updated above
+    // Draw climber selection zone
+    if (climberSelection) {
+        const dx = climberSelection.x - offsetX;
+        const dy = climberSelection.y - offsetY;
+        const r = climberSelectionRadius;
+
+        // Semi-transparent fill
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = '#FF8C00';
+        ctx.beginPath();
+        ctx.arc(dx, dy, r, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+
+        // Solid border
+        ctx.strokeStyle = '#FF8C00';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(dx, dy, r, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Crosshair at center
+        const ch = 10;
+        ctx.strokeStyle = '#FF8C00';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(dx - ch, dy); ctx.lineTo(dx + ch, dy);
+        ctx.moveTo(dx, dy - ch); ctx.lineTo(dx, dy + ch);
+        ctx.stroke();
+
+        // Label
+        ctx.fillStyle = '#FF8C00';
+        ctx.font = 'bold 13px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('Escalador', dx - r, dy - r - 2);
+    }
 }
 
 /**
@@ -1214,7 +1255,7 @@ function handleCanvasClick(event) {
         console.log('Escalador seleccionado (px):', climberSelection, 'Radio:', climberSelectionRadius);
 
         updateCanvasMode();
-        // El usuario probablemente quiere seguir ajustando presas
+        drawHoldsOnCanvas();
         return;
     }
 

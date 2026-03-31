@@ -24,7 +24,7 @@ class PoseTracker:
         video_path: str,
         roi: Optional[Tuple[int, int, int, int]] = None,
         climber_point: Optional[Tuple[int, int]] = None,
-        climber_radius: float = 80.0
+        climber_radius: float = 150.0
     ) -> Tuple[List[Dict], float]:
         """
         Process video and extract pose landmarks for each frame
@@ -62,6 +62,11 @@ class PoseTracker:
             cy = max(0, min(int(cy), height - 1))
             climber_point_norm = (cx / width, cy / height)
             climber_radius_norm = float(climber_radius) / max(width, height)
+
+        # Tracks the last accepted pose center so the search zone follows the climber
+        current_climber_norm = climber_point_norm
+        # Until the first pose is accepted, use a wider radius to help bootstrap tracking
+        first_detection_done = False
         
         logger.info(f"Processing video: {width}x{height} @ {fps} fps")
         if roi:
@@ -121,11 +126,10 @@ class PoseTracker:
             has_pose = False
             
             if results.pose_landmarks:
-                # Check if we have enough visible landmarks (at least 8, lowered from 10)
-                # Use lower visibility threshold (0.3 instead of 0.5) for better detection
-                visible_landmarks = sum(1 for lm in results.pose_landmarks.landmark if lm.visibility > 0.3)
-                
-                if visible_landmarks >= 8:  # Minimum landmarks to consider valid (lowered from 10)
+                # Accept poses with few visible landmarks — climbing often occludes limbs
+                visible_landmarks = sum(1 for lm in results.pose_landmarks.landmark if lm.visibility > 0.1)
+
+                if visible_landmarks >= 6:
                     has_pose = True
                     
                     for idx, landmark in enumerate(results.pose_landmarks.landmark):
@@ -158,28 +162,46 @@ class PoseTracker:
                             "visibility": landmark.visibility
                         }
 
-                    # Optional filter: keep only poses close to the selected climber point.
-                    # This helps when MediaPipe jumps to another person in the frame.
-                    if climber_point_norm and climber_radius_norm is not None:
-                        # Use shoulder+hip center as a coarse pose center
-                        center_indices = [11, 12, 23, 24]  # shoulders and hips
+                    # Optional filter: keep only poses close to the last known climber position.
+                    # Uses the previous frame's accepted pose center so the zone follows the climber.
+                    if current_climber_norm and climber_radius_norm is not None:
+                        # Use torso landmarks that are actually visible to build the center.
+                        # Nose (0) is excluded because when the climber faces the wall it is
+                        # extrapolated to a position far from the body, pulling the mean off.
+                        # Prefer high-visibility landmarks; fall back to all of them if none pass.
+                        center_indices = [11, 12, 23, 24]  # shoulders + hips
                         cx_vals = []
                         cy_vals = []
                         for cidx in center_indices:
                             key = f"landmark_{cidx}"
-                            if key in landmarks_dict:
+                            if key in landmarks_dict and landmarks_dict[key]["visibility"] > 0.2:
                                 cx_vals.append(landmarks_dict[key]["x"])
                                 cy_vals.append(landmarks_dict[key]["y"])
+                        # Fallback: accept any of these landmarks regardless of visibility
+                        if not cx_vals:
+                            for cidx in center_indices:
+                                key = f"landmark_{cidx}"
+                                if key in landmarks_dict:
+                                    cx_vals.append(landmarks_dict[key]["x"])
+                                    cy_vals.append(landmarks_dict[key]["y"])
 
-                        if len(cx_vals) == 4:
+                        if len(cx_vals) >= 2:
                             pose_cx = float(np.mean(cx_vals))
                             pose_cy = float(np.mean(cy_vals))
-                            dist = float(np.sqrt((pose_cx - climber_point_norm[0]) ** 2 + (pose_cy - climber_point_norm[1]) ** 2))
-                            if dist > climber_radius_norm:
+                            # During bootstrap (before first detection) use a 2× wider radius
+                            active_radius = climber_radius_norm * (2.0 if not first_detection_done else 1.0)
+                            dist = float(np.sqrt((pose_cx - current_climber_norm[0]) ** 2 + (pose_cy - current_climber_norm[1]) ** 2))
+                            if dist <= active_radius:
+                                # Accepted: advance tracking center to follow the climber
+                                current_climber_norm = (pose_cx, pose_cy)
+                                first_detection_done = True
+                            else:
+                                logger.debug(f"Frame {frame_number}: pose rejected by climber filter (dist={dist:.3f} > radius={active_radius:.3f})")
                                 has_pose = False
                                 landmarks_dict = {}
                         else:
-                            # If we can't compute the center reliably, be conservative.
+                            # Not enough landmarks to compute a reliable center — skip this pose
+                            logger.debug(f"Frame {frame_number}: pose rejected — only {len(cx_vals)} center landmarks available")
                             has_pose = False
                             landmarks_dict = {}
 

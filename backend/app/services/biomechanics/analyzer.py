@@ -189,39 +189,68 @@ class BiomechanicalAnalyzer:
                 return timestamps[i]
         return 0.0
     
-    def detect_steps(self, com_positions: List[Point3D], holds: List[Tuple[int, int]], timestamps: List[float], frame_width: int = 1920, frame_height: int = 1080) -> List[StepData]:
+    def detect_steps(self, frames_data: List[Dict], holds: List[Tuple[int, int]], video_width: int, video_height: int) -> List[StepData]:
         """
-        Detect climbing steps by tracking when CoM crosses hold thresholds
+        Detect climbing steps as the time between consecutive hold contacts.
+
+        A step is defined as the interval from the first frame a limb touches hold A
+        to the first frame a limb touches hold B, where A and B are consecutive in
+        chronological order of first contact.  Holds that are never touched or are
+        skipped by the climber are simply absent from the sequence.
         """
+        if not holds or not frames_data:
+            return []
+
+        # --- 1. Find the earliest frame each hold is touched ---
+        hold_first_touch: Dict[int, float] = {}  # hold_idx -> timestamp
+
+        for frame_data in frames_data:
+            if not frame_data.get("has_pose", False):
+                continue
+            landmarks = frame_data.get("landmarks", {})
+            timestamp = frame_data.get("timestamp", 0.0)
+
+            for limb_idx in [15, 16, 27, 28]:  # left/right wrist, left/right ankle
+                key = f"landmark_{limb_idx}"
+                if key not in landmarks:
+                    continue
+                lm = landmarks[key]
+                lm_x_norm = lm["x"]
+                lm_y_norm = lm["y"]
+
+                for hold_idx, (hold_x, hold_y) in enumerate(holds):
+                    if hold_idx in hold_first_touch:
+                        continue  # already registered
+                    hold_x_norm = hold_x / video_width
+                    hold_y_norm = hold_y / video_height
+                    dist = np.sqrt((lm_x_norm - hold_x_norm) ** 2 + (lm_y_norm - hold_y_norm) ** 2)
+                    if dist < 0.02:
+                        hold_first_touch[hold_idx] = timestamp
+
+        # --- 2. Sort touched holds by time of first contact ---
+        touched_in_order = sorted(hold_first_touch.items(), key=lambda item: item[1])
+
+        if len(touched_in_order) < 2:
+            return []
+
+        # --- 3. Build one step per consecutive pair ---
         steps = []
-        if not holds:
-            return steps
-        
-        # Convert holds to normalized coordinates (assuming they're in pixel coordinates)
-        normalized_holds = [(x / frame_width, y / frame_height) for x, y in holds]
-        
-        current_step = 0
-        step_start_time = timestamps[0] if timestamps else 0
-        
-        for i, com in enumerate(com_positions):
-            # Check if CoM has crossed a hold threshold (vertical position)
-            if current_step < len(normalized_holds):
-                target_hold_y = normalized_holds[current_step][1]
-                
-                # If CoM has passed the current hold
-                if com.y >= target_hold_y:
-                    step_end_time = timestamps[i] if i < len(timestamps) else timestamps[-1]
-                    steps.append(StepData(
-                        step_number=current_step + 1,
-                        start_time=step_start_time,
-                        end_time=step_end_time,
-                        duration=step_end_time - step_start_time,
-                        start_hold=Point2D(x=normalized_holds[current_step][0], y=normalized_holds[current_step][1]) if current_step > 0 else Point2D(x=0, y=0),
-                        end_hold=Point2D(x=normalized_holds[current_step][0], y=normalized_holds[current_step][1])
-                    ))
-                    step_start_time = step_end_time
-                    current_step += 1
-        
+        for i in range(len(touched_in_order) - 1):
+            hold_a_idx, time_a = touched_in_order[i]
+            hold_b_idx, time_b = touched_in_order[i + 1]
+
+            hold_a_x, hold_a_y = holds[hold_a_idx]
+            hold_b_x, hold_b_y = holds[hold_b_idx]
+
+            steps.append(StepData(
+                step_number=i + 1,
+                start_time=time_a,
+                end_time=time_b,
+                duration=time_b - time_a,
+                start_hold=Point2D(x=float(hold_a_x), y=float(hold_a_y)),
+                end_hold=Point2D(x=float(hold_b_x), y=float(hold_b_y)),
+            ))
+
         return steps
     
     def calculate_limb_forces(self, frame_data: Dict, com: Point3D, acceleration: Point3D) -> List[LimbForce]:
@@ -328,8 +357,8 @@ class BiomechanicalAnalyzer:
         # Calculate reaction time
         reaction_time = self.calculate_reaction_time(accelerations, timestamps)
         
-        # Detect steps
-        steps = self.detect_steps(com_positions_smooth, holds, timestamps)
+        # Detect steps (time between consecutive hold contacts, in touch order)
+        steps = self.detect_steps(frames_data, holds, video_width, video_height)
         
         # Track which holds have been reached
         holds_reached = set()

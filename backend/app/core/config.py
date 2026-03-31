@@ -18,8 +18,8 @@ class Settings:
     ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
     
     # MediaPipe settings
-    MIN_DETECTION_CONFIDENCE = 0.3  # Lowered for better detection
-    MIN_TRACKING_CONFIDENCE = 0.3  # Lowered to maintain tracking
+    MIN_DETECTION_CONFIDENCE = 0.1  # Low threshold for climbing (partial visibility common)
+    MIN_TRACKING_CONFIDENCE = 0.1  # Low threshold to maintain tracking mid-climb
     
     # Biomechanical analysis settings
     DEFAULT_CLIMBER_WEIGHT = 70.0  # kg

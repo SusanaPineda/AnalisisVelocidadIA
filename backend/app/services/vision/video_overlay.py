@@ -6,15 +6,16 @@ import mediapipe as mp
 import numpy as np
 from typing import Dict
 from app.models.schemas import AnalysisResult, Landmark
+from app.core.config import settings
 
 class VideoOverlay:
     """Creates video overlay with pose skeleton and biomechanical metrics"""
-    
+
     def __init__(self):
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(
-            min_detection_confidence=0.3,  # Lowered for better detection
-            min_tracking_confidence=0.3,  # Lowered to maintain tracking
+            min_detection_confidence=settings.MIN_DETECTION_CONFIDENCE,
+            min_tracking_confidence=settings.MIN_TRACKING_CONFIDENCE,
             model_complexity=2
         )
         self.mp_drawing = mp.solutions.drawing_utils
@@ -169,6 +170,36 @@ class VideoOverlay:
                     cv2.putText(frame, "CoM", (com_x + 15, com_y), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
+            # Draw climber search zone (circle around detected torso center)
+            # Shows where the system is looking for the climber so it can be verified visually
+            if frame_data and frame_data.landmarks and len(frame_data.landmarks) > 0:
+                center_indices = [11, 12, 23, 24]  # shoulders + hips
+                cx_vals = []
+                cy_vals = []
+                for cidx in center_indices:
+                    key = f"landmark_{cidx}"
+                    if key in frame_data.landmarks:
+                        lm = frame_data.landmarks[key]
+                        cx_vals.append(lm.x * width)
+                        cy_vals.append(lm.y * height)
+                if len(cx_vals) >= 2:
+                    zone_cx = int(np.mean(cx_vals))
+                    zone_cy = int(np.mean(cy_vals))
+                    # Radius: use stored climber_radius if available, else a sensible default
+                    zone_r = int(analysis_result.climber_radius) if analysis_result.climber_radius else int(max(width, height) * 0.12)
+                    # Semi-transparent fill
+                    overlay_zone = frame.copy()
+                    cv2.circle(overlay_zone, (zone_cx, zone_cy), zone_r, (0, 200, 255), -1)
+                    frame = cv2.addWeighted(overlay_zone, 0.10, frame, 0.90, 0)
+                    # Solid border (orange)
+                    cv2.circle(frame, (zone_cx, zone_cy), zone_r, (0, 165, 255), 2)
+                    # Small crosshair at center
+                    ch = 10
+                    cv2.line(frame, (zone_cx - ch, zone_cy), (zone_cx + ch, zone_cy), (0, 165, 255), 2)
+                    cv2.line(frame, (zone_cx, zone_cy - ch), (zone_cx, zone_cy + ch), (0, 165, 255), 2)
+                    cv2.putText(frame, "Escalador", (zone_cx - zone_r, zone_cy - zone_r - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+
             # Draw ROI if it was provided but we didn't crop the output (debug / legacy mode)
             if analysis_result.roi and not roi_crop:
                 roi_x, roi_y, roi_w, roi_h = analysis_result.roi
