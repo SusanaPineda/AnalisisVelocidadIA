@@ -3,7 +3,7 @@ Module for detecting red holds in the climbing wall using HSV thresholding
 """
 import cv2
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from app.core.config import settings
 
 class HoldDetector:
@@ -18,7 +18,8 @@ class HoldDetector:
     def detect_holds(self, video_path: str, 
                      lower_hsv1: tuple = None, upper_hsv1: tuple = None,
                      lower_hsv2: tuple = None, upper_hsv2: tuple = None,
-                     min_area: int = 100) -> List[Tuple[int, int]]:
+                     min_area: int = 100,
+                     roi: Optional[Tuple[int, int, int, int]] = None) -> List[Tuple[int, int]]:
         """
         Detect red holds in the first frame of the video
         
@@ -43,6 +44,23 @@ class HoldDetector:
         if not ret:
             raise ValueError("Could not read first frame")
         
+        roi_x_offset = 0
+        roi_y_offset = 0
+        if roi:
+            roi_x, roi_y, roi_w, roi_h = roi
+            frame_h, frame_w = frame.shape[:2]
+
+            # Clamp ROI to frame bounds
+            roi_x = max(0, min(int(roi_x), frame_w - 1))
+            roi_y = max(0, min(int(roi_y), frame_h - 1))
+            roi_w = min(int(roi_w), frame_w - roi_x)
+            roi_h = min(int(roi_h), frame_h - roi_y)
+
+            roi_x_offset = roi_x
+            roi_y_offset = roi_y
+
+            frame = frame[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+
         # Use custom thresholds if provided, otherwise use defaults
         lower1 = np.array(lower_hsv1) if lower_hsv1 else self.lower_red1
         upper1 = np.array(upper_hsv1) if upper_hsv1 else self.upper_red1
@@ -75,7 +93,8 @@ class HoldDetector:
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    holds.append((cx, cy))
+                    # Convert back to original-frame coordinates (centroids computed on cropped frame)
+                    holds.append((cx + roi_x_offset, cy + roi_y_offset))
         
         # Sort holds by y-coordinate (top to bottom)
         holds.sort(key=lambda h: h[1])

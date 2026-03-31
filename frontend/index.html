@@ -110,21 +110,8 @@
                 <h3 class="text-2xl font-semibold mb-4">Ajustar Detección de Presas</h3>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <!-- Left: Image with holds -->
+                    <!-- Left: Canvas only -->
                     <div>
-                        <div class="mb-4">
-                            <label class="flex items-center mb-2 cursor-pointer">
-                                <input type="checkbox" id="useRoiCheckbox" class="mr-2 w-4 h-4">
-                                <span class="text-sm">Usar Región de Interés (ROI) para mejorar detección de pose</span>
-                            </label>
-                            <p class="text-xs text-gray-400 mb-2">
-                                Si el escalador ocupa una pequeña parte del video, marca esta opción y arrastra en la imagen para seleccionar el área.
-                            </p>
-                            <div id="roiInfo" class="hidden mt-2 text-sm text-yellow-300">
-                                <strong>ROI seleccionada:</strong> <span id="roiDimensions"></span>
-                            </div>
-                        </div>
-                        
                         <div class="relative bg-gray-900 rounded-lg overflow-hidden mb-4" style="position: relative;">
                             <canvas id="holdCanvas" class="w-full h-auto" style="display: block; max-width: 100%;"></canvas>
                             <p class="text-sm text-gray-400 mt-2 text-center">
@@ -134,7 +121,143 @@
                                 Doble clic en una presa para marcarla como FIN
                             </p>
                         </div>
-                        
+                    </div>
+
+                    <!-- Right: Controls -->
+                    <div class="space-y-4">
+                        <div class="space-y-2">
+                            <label class="flex items-center mb-2 cursor-pointer">
+                                <input type="checkbox" id="useRoiCheckbox" class="mr-2 w-4 h-4">
+                                <span class="text-sm">Usar Región de Interés (ROI) para mejorar detección de pose</span>
+                            </label>
+                            <p class="text-xs text-gray-400">
+                                Si el escalador ocupa una pequeña parte del video, marca esta opción y arrastra en la imagen para seleccionar el área.
+                            </p>
+                            <div id="roiInfo" class="hidden mt-2 text-sm text-yellow-300">
+                                <strong>ROI seleccionada:</strong> <span id="roiDimensions"></span>
+                            </div>
+                            <button id="clearRoiBtn"
+                                    class="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded mt-2">
+                                Eliminar ROI
+                            </button>
+                        </div>
+
+                        <div class="p-3 bg-gray-900 border border-gray-700 rounded text-sm space-y-2">
+                            <div class="flex justify-between items-center">
+                                <span class="font-medium">Selección simple de color de presa</span>
+                                <button id="colorPickerBtn"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white text-xs py-1 px-3 rounded">
+                                    Gotero
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-400">
+                                Pulsa <strong>Gotero</strong> y haz clic sobre una presa para tomar su color.
+                                Usa la tolerancia para afinar la detección.
+                            </p>
+                            <div>
+                                <label class="block text-xs mb-1">
+                                    Tolerancia color: <span id="colorToleranceValue">20</span>
+                                </label>
+                                <input type="range" id="colorTolerance" min="5" max="60" value="20" class="w-full">
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-gray-900 border border-gray-700 rounded text-sm space-y-2 mt-1">
+                            <div class="flex justify-between items-center">
+                                <span class="font-medium">Selección de escalador</span>
+                                <button id="climberPickerBtn"
+                                        class="bg-purple-700 hover:bg-purple-800 text-white text-xs py-1 px-3 rounded">
+                                    Seleccionar
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-400">
+                                Si hay más de una persona, clic en el escalador para filtrar la pose.
+                            </p>
+                            <div class="flex gap-2">
+                                <button id="clearClimberSelectionBtn"
+                                        class="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs py-2 px-3 rounded">
+                                    Eliminar
+                                </button>
+                            </div>
+                            <div>
+                                <label class="block text-xs mb-1">
+                                    Tolerancia (radio) escalador: <span id="climberRadiusValue">80</span> px
+                                </label>
+                                <input type="range" id="climberSelectionRadius" min="20" max="200" value="80" class="w-full">
+                            </div>
+                        </div>
+
+                        <details class="p-3 bg-gray-900 border border-gray-700 rounded text-sm">
+                            <summary class="cursor-pointer font-medium mb-3">Detección avanzada de presas</summary>
+
+                            <div class="space-y-4">
+                                <div>
+                                    <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 1</h4>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-sm mb-1">H Min: <span id="h1MinValue">0</span></label>
+                                            <input type="range" id="h1Min" min="0" max="179" value="0" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">H Max: <span id="h1MaxValue">10</span></label>
+                                            <input type="range" id="h1Max" min="0" max="179" value="10" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">S Min: <span id="s1MinValue">100</span></label>
+                                            <input type="range" id="s1Min" min="0" max="255" value="100" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">S Max: <span id="s1MaxValue">255</span></label>
+                                            <input type="range" id="s1Max" min="0" max="255" value="255" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">V Min: <span id="v1MinValue">100</span></label>
+                                            <input type="range" id="v1Min" min="0" max="255" value="100" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">V Max: <span id="v1MaxValue">255</span></label>
+                                            <input type="range" id="v1Max" min="0" max="255" value="255" class="w-full">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 2 (Rojo que envuelve)</h4>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-sm mb-1">H Min: <span id="h2MinValue">170</span></label>
+                                            <input type="range" id="h2Min" min="0" max="179" value="170" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">H Max: <span id="h2MaxValue">180</span></label>
+                                            <input type="range" id="h2Max" min="0" max="179" value="180" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">S Min: <span id="s2MinValue">100</span></label>
+                                            <input type="range" id="s2Min" min="0" max="255" value="100" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">S Max: <span id="s2MaxValue">255</span></label>
+                                            <input type="range" id="s2Max" min="0" max="255" value="255" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">V Min: <span id="v2MinValue">100</span></label>
+                                            <input type="range" id="v2Min" min="0" max="255" value="100" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm mb-1">V Max: <span id="v2MaxValue">255</span></label>
+                                            <input type="range" id="v2Max" min="0" max="255" value="255" class="w-full">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm mb-1">Área Mínima: <span id="minAreaValue">100</span> píxeles</label>
+                                    <input type="range" id="minArea" min="50" max="1000" value="100" class="w-full">
+                                </div>
+                            </div>
+                        </details>
+
                         <div class="space-y-2">
                             <button id="clearHoldsBtn" class="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded">
                                 Limpiar Todas las Presas
@@ -143,75 +266,7 @@
                                 Eliminar Última Presa
                             </button>
                         </div>
-                    </div>
-                    
-                    <!-- Right: HSV Controls -->
-                    <div class="space-y-4">
-                        <div>
-                            <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 1</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <label class="block text-sm mb-1">H Min: <span id="h1MinValue">0</span></label>
-                                    <input type="range" id="h1Min" min="0" max="179" value="0" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">H Max: <span id="h1MaxValue">10</span></label>
-                                    <input type="range" id="h1Max" min="0" max="179" value="10" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">S Min: <span id="s1MinValue">100</span></label>
-                                    <input type="range" id="s1Min" min="0" max="255" value="100" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">S Max: <span id="s1MaxValue">255</span></label>
-                                    <input type="range" id="s1Max" min="0" max="255" value="255" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">V Min: <span id="v1MinValue">100</span></label>
-                                    <input type="range" id="v1Min" min="0" max="255" value="100" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">V Max: <span id="v1MaxValue">255</span></label>
-                                    <input type="range" id="v1Max" min="0" max="255" value="255" class="w-full">
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <h4 class="text-lg font-medium mb-3">Umbrales HSV - Rango 2 (Rojo que envuelve)</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <label class="block text-sm mb-1">H Min: <span id="h2MinValue">170</span></label>
-                                    <input type="range" id="h2Min" min="0" max="179" value="170" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">H Max: <span id="h2MaxValue">180</span></label>
-                                    <input type="range" id="h2Max" min="0" max="179" value="180" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">S Min: <span id="s2MinValue">100</span></label>
-                                    <input type="range" id="s2Min" min="0" max="255" value="100" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">S Max: <span id="s2MaxValue">255</span></label>
-                                    <input type="range" id="s2Max" min="0" max="255" value="255" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">V Min: <span id="v2MinValue">100</span></label>
-                                    <input type="range" id="v2Min" min="0" max="255" value="100" class="w-full">
-                                </div>
-                                <div>
-                                    <label class="block text-sm mb-1">V Max: <span id="v2MaxValue">255</span></label>
-                                    <input type="range" id="v2Max" min="0" max="255" value="255" class="w-full">
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm mb-1">Área Mínima: <span id="minAreaValue">100</span> píxeles</label>
-                            <input type="range" id="minArea" min="50" max="1000" value="100" class="w-full">
-                        </div>
-                        
+
                         <div class="flex gap-2">
                             <button id="detectHoldsBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded">
                                 Detectar Presas
@@ -220,14 +275,9 @@
                                 Confirmar y Analizar
                             </button>
                         </div>
-                        
+
                         <div id="holdsCount" class="text-center text-gray-400 mt-2">
                             Presas detectadas: 0
-                        </div>
-                        
-                        <div class="mt-4 p-3 bg-blue-900 bg-opacity-50 border border-blue-600 rounded text-sm">
-                            <strong class="text-blue-300">💡 Consejo:</strong> 
-                            <span class="text-blue-200">Si la detección de pose es baja, activa el Modo ROI y selecciona el área donde está el escalador para mejorar los resultados.</span>
                         </div>
                     </div>
                 </div>

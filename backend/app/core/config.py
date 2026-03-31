@@ -3,6 +3,7 @@ Configuration settings for the application
 """
 import os
 from pathlib import Path
+from typing import List
 
 class Settings:
     """Application settings"""
@@ -30,6 +31,14 @@ class Settings:
     RED_HOLD_UPPER_HSV = (10, 255, 255)
     RED_HOLD_LOWER_HSV2 = (170, 100, 100)  # Red wraps around in HSV
     RED_HOLD_UPPER_HSV2 = (180, 255, 255)
+    
+    # CORS: lista de orígenes permitidos. Si no se define CORS_ORIGINS, se usa ["*"]
+    @staticmethod
+    def cors_origins() -> List[str]:
+        raw = os.environ.get("CORS_ORIGINS", "").strip()
+        if not raw:
+            return ["*"]
+        return [o.strip() for o in raw.split(",") if o.strip()]
     
     def __init__(self):
         # Create directories if they don't exist

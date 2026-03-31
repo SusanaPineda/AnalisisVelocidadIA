@@ -19,7 +19,13 @@ class PoseTracker:
         )
         self.mp_drawing = mp.solutions.drawing_utils
     
-    def process_video(self, video_path: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[List[Dict], float]:
+    def process_video(
+        self,
+        video_path: str,
+        roi: Optional[Tuple[int, int, int, int]] = None,
+        climber_point: Optional[Tuple[int, int]] = None,
+        climber_radius: float = 80.0
+    ) -> Tuple[List[Dict], float]:
         """
         Process video and extract pose landmarks for each frame
         
@@ -46,6 +52,16 @@ class PoseTracker:
         # Get video dimensions
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        climber_point_norm = None
+        climber_radius_norm = None
+        if climber_point:
+            # Compare in normalized coordinates (0-1) to be robust across resizes/crops.
+            cx, cy = climber_point
+            cx = max(0, min(int(cx), width - 1))
+            cy = max(0, min(int(cy), height - 1))
+            climber_point_norm = (cx / width, cy / height)
+            climber_radius_norm = float(climber_radius) / max(width, height)
         
         logger.info(f"Processing video: {width}x{height} @ {fps} fps")
         if roi:
@@ -111,7 +127,6 @@ class PoseTracker:
                 
                 if visible_landmarks >= 8:  # Minimum landmarks to consider valid (lowered from 10)
                     has_pose = True
-                    pose_detected_count += 1
                     
                     for idx, landmark in enumerate(results.pose_landmarks.landmark):
                         # Transform coordinates from processed frame back to original frame
@@ -142,6 +157,34 @@ class PoseTracker:
                             "z": landmark.z,
                             "visibility": landmark.visibility
                         }
+
+                    # Optional filter: keep only poses close to the selected climber point.
+                    # This helps when MediaPipe jumps to another person in the frame.
+                    if climber_point_norm and climber_radius_norm is not None:
+                        # Use shoulder+hip center as a coarse pose center
+                        center_indices = [11, 12, 23, 24]  # shoulders and hips
+                        cx_vals = []
+                        cy_vals = []
+                        for cidx in center_indices:
+                            key = f"landmark_{cidx}"
+                            if key in landmarks_dict:
+                                cx_vals.append(landmarks_dict[key]["x"])
+                                cy_vals.append(landmarks_dict[key]["y"])
+
+                        if len(cx_vals) == 4:
+                            pose_cx = float(np.mean(cx_vals))
+                            pose_cy = float(np.mean(cy_vals))
+                            dist = float(np.sqrt((pose_cx - climber_point_norm[0]) ** 2 + (pose_cy - climber_point_norm[1]) ** 2))
+                            if dist > climber_radius_norm:
+                                has_pose = False
+                                landmarks_dict = {}
+                        else:
+                            # If we can't compute the center reliably, be conservative.
+                            has_pose = False
+                            landmarks_dict = {}
+
+                    if has_pose:
+                        pose_detected_count += 1
                 else:
                     if frame_number < 5 or frame_number % 50 == 0:  # Log first few and every 50th
                         logger.debug(f"Frame {frame_number}: Only {visible_landmarks} visible landmarks (need 8+)")

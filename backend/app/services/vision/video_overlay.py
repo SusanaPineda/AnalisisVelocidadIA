@@ -37,6 +37,19 @@ class VideoOverlay:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         logger.info(f"Creating overlay video: {width}x{height} @ {fps} fps")
+
+        # If ROI is provided, we crop the output video to that region.
+        roi_crop = None
+        if analysis_result.roi:
+            roi_x, roi_y, roi_w, roi_h = analysis_result.roi
+            # Clamp ROI to original frame bounds
+            roi_x = max(0, min(int(roi_x), width - 1))
+            roi_y = max(0, min(int(roi_y), height - 1))
+            roi_w = min(int(roi_w), width - roi_x)
+            roi_h = min(int(roi_h), height - roi_y)
+            if roi_w > 0 and roi_h > 0:
+                roi_crop = (roi_x, roi_y, roi_w, roi_h)
+                logger.info(f"Cropping overlay output to ROI: {roi_crop}")
         
         # Try codecs that work without H.264 encoder
         # Strategy: Try MP4 with mp4v first (some browsers support it), then fallback to AVI
@@ -60,9 +73,11 @@ class VideoOverlay:
         final_output_path = None
         
         # First try MP4 with mp4v
+        out_width, out_height = (roi_crop[2], roi_crop[3]) if roi_crop else (width, height)
+
         if output_path_str.endswith('.mp4'):
             for codec_name, fourcc in fourcc_codecs_mp4:
-                out = cv2.VideoWriter(output_path_str, fourcc, fps, (width, height))
+                out = cv2.VideoWriter(output_path_str, fourcc, fps, (out_width, out_height))
                 if out.isOpened():
                     used_codec = codec_name
                     final_output_path = output_path_str
@@ -77,7 +92,7 @@ class VideoOverlay:
         if out is None:
             logger.warning("MP4 with mp4v failed, trying AVI format")
             for codec_name, fourcc in fourcc_codecs_avi:
-                out = cv2.VideoWriter(temp_avi_path, fourcc, fps, (width, height))
+                out = cv2.VideoWriter(temp_avi_path, fourcc, fps, (out_width, out_height))
                 if out.isOpened():
                     used_codec = codec_name
                     final_output_path = temp_avi_path
@@ -97,12 +112,20 @@ class VideoOverlay:
         # Track which holds have been touched (persistent across frames)
         holds_touched = set()
         last_hold_reached = None
+
+        # Precompute ordering of holds from bottom (mayor y) to top (menor y)
+        holds_with_index = []
         
         # Log holds information
         if analysis_result.holds:
-            logger.info(f"Drawing {len(analysis_result.holds)} holds in video")
-            for i, (hx, hy) in enumerate(analysis_result.holds):
-                logger.info(f"Hold {i+1}: ({hx}, {hy})")
+            for idx, (hx, hy) in enumerate(analysis_result.holds):
+                holds_with_index.append({"idx": idx, "x": hx, "y": hy})
+            # Ordenar de abajo (y más grande) a arriba (y más pequeño)
+            holds_with_index.sort(key=lambda h: h["y"], reverse=True)
+
+            logger.info(f"Drawing {len(analysis_result.holds)} holds in video (bottom-to-top numbering)")
+            for display_idx, meta in enumerate(holds_with_index):
+                logger.info(f"Hold {display_idx+1}: ({meta['x']}, {meta['y']}) [original index {meta['idx']}]")
         else:
             logger.warning("No holds detected in analysis result")
         
@@ -146,8 +169,8 @@ class VideoOverlay:
                     cv2.putText(frame, "CoM", (com_x + 15, com_y), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
-            # Draw ROI if it was used (yellow border, no fill)
-            if analysis_result.roi:
+            # Draw ROI if it was provided but we didn't crop the output (debug / legacy mode)
+            if analysis_result.roi and not roi_crop:
                 roi_x, roi_y, roi_w, roi_h = analysis_result.roi
                 # Validate ROI coordinates are within frame
                 if 0 <= roi_x < width and 0 <= roi_y < height:
@@ -194,7 +217,10 @@ class VideoOverlay:
                                         last_hold_reached = hold_idx
             
             if analysis_result.holds and len(analysis_result.holds) > 0:
-                for hold_idx, (hold_x, hold_y) in enumerate(analysis_result.holds):
+                for display_idx, meta in enumerate(holds_with_index):
+                    hold_idx = meta["idx"]
+                    hold_x = meta["x"]
+                    hold_y = meta["y"]
                     # Validate coordinates are within frame
                     if 0 <= hold_x < width and 0 <= hold_y < height:
                         is_finish_hold = analysis_result.finish_hold_index == hold_idx
@@ -222,8 +248,8 @@ class VideoOverlay:
                             # Red when not touched
                             cv2.circle(frame, (hold_x, hold_y), 15, (0, 0, 255), -1)  # Red filled circle
                             cv2.circle(frame, (hold_x, hold_y), 15, (255, 255, 255), 2)  # White border
-                        # Draw hold number
-                        cv2.putText(frame, str(hold_idx + 1), (hold_x - 5, hold_y + 5), 
+                        # Draw hold number (bottom-to-top: 1 = más abajo)
+                        cv2.putText(frame, str(display_idx + 1), (hold_x - 5, hold_y + 5), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
                     else:
                         logger.warning(f"Hold {hold_idx+1} coordinates ({hold_x}, {hold_y}) out of bounds ({width}x{height})")
@@ -234,9 +260,13 @@ class VideoOverlay:
                     f"Time: {frame_data.timestamp:.2f}s",
                     f"Acceleration: {np.sqrt(frame_data.acceleration.x**2 + frame_data.acceleration.y**2):.2f} m/s²"
                 ]
-                # Show last hold reached
-                if last_hold_reached is not None:
-                    metrics_text.append(f"Ultima presa: {last_hold_reached + 1}")
+                # Show last hold reached (using display number bottom-to-top)
+                if last_hold_reached is not None and holds_with_index:
+                    # Map original index to display index
+                    meta = next((m for m in holds_with_index if m["idx"] == last_hold_reached), None)
+                    if meta is not None:
+                        display_num = holds_with_index.index(meta) + 1
+                        metrics_text.append(f"Ultima presa: {display_num}")
             else:
                 metrics_text = [f"Frame: {frame_idx}"]
             
@@ -246,7 +276,12 @@ class VideoOverlay:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 y_offset += 25
             
-            out.write(frame)
+            if roi_crop:
+                roi_x, roi_y, roi_w, roi_h = roi_crop
+                cropped = frame[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+                out.write(cropped)
+            else:
+                out.write(frame)
             frame_idx += 1
         
         logger.info(f"Processed {frame_idx} frames")

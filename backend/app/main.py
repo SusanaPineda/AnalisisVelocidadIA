@@ -18,9 +18,10 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend communication
+# Set CORS_ORIGINS="https://a.com,https://b.com" to restrict; default ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=settings.cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

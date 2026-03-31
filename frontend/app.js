@@ -16,6 +16,13 @@ let imageHeight = 0;
 let roiMode = false;  // true = selecting ROI, false = adding holds
 let roiStart = null;  // {x, y} when starting ROI selection
 let currentRoi = null;  // {x, y, width, height} in original image coordinates
+let displayRoiOffset = { x: 0, y: 0 }; // translation from original image coords -> canvas display coords
+let tempRoi = null; // ROI provisional mientras arrastras (solo para vista previa en modo ROI)
+let colorPickMode = false; // true = próximo click en canvas toma color de presa
+let pickedColorHsv = null; // {h, s, v} de la muestra actual
+let climberPickMode = false; // true = próximo click en canvas toma punto del escalador
+let climberSelection = null; // {x, y} en coordenadas originales de la imagen
+let climberSelectionRadius = 80; // tolerancia en px (radio)
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -430,6 +437,9 @@ async function showHoldDetectionModal(videoId, climberWeight, originalFile) {
     // Reset state
     currentHolds = [];
     currentRoi = null;
+    climberSelection = null;
+    climberPickMode = false;
+    tempRoi = null;
     roiMode = false;
     roiStart = null;
     
@@ -515,18 +525,7 @@ function setupCanvas() {
     canvas.width = imageWidth;
     canvas.height = imageHeight;
     
-    // Set display size (CSS) - maintain aspect ratio but fit container
-    const container = canvas.parentElement;
-    const maxWidth = container ? container.clientWidth - 20 : 800; // Leave some padding
-    const aspectRatio = imageHeight / imageWidth;
-    
-    if (imageWidth > maxWidth) {
-        canvas.style.width = maxWidth + 'px';
-        canvas.style.height = (maxWidth * aspectRatio) + 'px';
-    } else {
-        canvas.style.width = imageWidth + 'px';
-        canvas.style.height = imageHeight + 'px';
-    }
+    resizeCanvasCss();
     
     console.log('Canvas setup:', {
         internalSize: `${canvas.width}x${canvas.height}`,
@@ -574,8 +573,92 @@ function setupCanvas() {
     // Initialize ROI mode
     roiMode = false;
     currentRoi = null;
+    tempRoi = null;
     roiStart = null;
     updateCanvasMode();
+}
+
+/**
+ * Whether the canvas is currently showing the image cropped to `currentRoi`.
+ * We keep full image while selecting ROI (roiMode=true), and switch to crop view when editing holds.
+ */
+function isRoiCropActive() {
+    return !!(currentRoi && !roiMode);
+}
+
+function resizeCanvasCss() {
+    if (!canvas) return;
+
+    const container = canvas.parentElement;
+    const maxWidth = container ? container.clientWidth - 20 : 800; // Leave some padding
+    const aspectRatio = canvas.height / canvas.width;
+
+    if (canvas.width > maxWidth) {
+        canvas.style.width = maxWidth + 'px';
+        canvas.style.height = (maxWidth * aspectRatio) + 'px';
+    } else {
+        canvas.style.width = canvas.width + 'px';
+        canvas.style.height = canvas.height + 'px';
+    }
+}
+
+function ensureCanvasDisplaySize() {
+    if (!canvas || !ctx) return;
+
+    const cropActive = isRoiCropActive();
+    const targetW = cropActive ? currentRoi.width : imageWidth;
+    const targetH = cropActive ? currentRoi.height : imageHeight;
+
+    // Internal resize resets drawing buffer, so we re-render every time.
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        resizeCanvasCss();
+    }
+
+    displayRoiOffset = cropActive
+        ? { x: currentRoi.x, y: currentRoi.y }  // original -> display: subtract these
+        : { x: 0, y: 0 };
+}
+
+function displayToOriginalCoords(displayX, displayY) {
+    // Canvas display coords -> original image coords
+    const cropActive = isRoiCropActive();
+    const offsetX = cropActive ? currentRoi.x : 0;
+    const offsetY = cropActive ? currentRoi.y : 0;
+    return { x: displayX + offsetX, y: displayY + offsetY };
+}
+
+// Utilidad: conversión RGB (0–255) -> HSV (H:0–179, S:0–255, V:0–255, compatible con OpenCV)
+function rgbToHsv(r, g, b) {
+    const rn = r / 255;
+    const gn = g / 255;
+    const bn = b / 255;
+
+    const max = Math.max(rn, gn, bn);
+    const min = Math.min(rn, gn, bn);
+    const delta = max - min;
+
+    let h = 0;
+    if (delta !== 0) {
+        if (max === rn) {
+            h = 60 * (((gn - bn) / delta) % 6);
+        } else if (max === gn) {
+            h = 60 * (((bn - rn) / delta) + 2);
+        } else {
+            h = 60 * (((rn - gn) / delta) + 4);
+        }
+    }
+    if (h < 0) h += 360;
+
+    const s = max === 0 ? 0 : (delta / max);
+    const v = max;
+
+    // Escalar a rangos OpenCV
+    const h_cv = Math.round((h / 2));      // 0–179 aprox
+    const s_cv = Math.round(s * 255);      // 0–255
+    const v_cv = Math.round(v * 255);      // 0–255
+    return [h_cv, s_cv, v_cv];
 }
 
 /**
@@ -616,6 +699,22 @@ function setupHSVSliders() {
             });
         }
     });
+
+    // Tolerancia de color para modo simple
+    const colorTolSlider = document.getElementById('colorTolerance');
+    const colorTolValue = document.getElementById('colorToleranceValue');
+    if (colorTolSlider && colorTolValue) {
+        colorTolSlider.addEventListener('input', (e) => {
+            colorTolValue.textContent = e.target.value;
+            // Si ya tenemos un color escogido, re-detectamos automáticamente
+            if (pickedColorHsv) {
+                clearTimeout(window.detectTimeout);
+                window.detectTimeout = setTimeout(() => {
+                    detectHoldsWithThresholds(currentVideoId);
+                }, 200);
+            }
+        });
+    }
 }
 
 /**
@@ -656,12 +755,88 @@ function setupHoldDetectionButtons(videoId, climberWeight, originalFile) {
     if (useRoiCheckbox) {
         useRoiCheckbox.addEventListener('change', (e) => {
             roiMode = e.target.checked;
-            if (!e.target.checked) {
-                currentRoi = null;
-                drawHoldsOnCanvas();
-            }
             updateCanvasMode();
             updateRoiInfo();
+            // Si ya hay ROI seleccionado, al salir del modo ROI mostramos el recorte para editar presas.
+            drawHoldsOnCanvas();
+        });
+    }
+
+    const clearRoiBtn = document.getElementById('clearRoiBtn');
+    if (clearRoiBtn) {
+        clearRoiBtn.addEventListener('click', () => {
+            currentRoi = null;
+            tempRoi = null;
+            roiStart = null;
+            roiMode = false;
+            if (useRoiCheckbox) {
+                useRoiCheckbox.checked = false;
+            }
+            updateRoiInfo();
+            updateCanvasMode();
+            drawHoldsOnCanvas();
+        });
+    }
+
+    // Botón de gotero (selección simple de color)
+    const colorPickerBtn = document.getElementById('colorPickerBtn');
+    if (colorPickerBtn) {
+        colorPickerBtn.addEventListener('click', () => {
+            colorPickMode = true;
+            climberPickMode = false;
+            const modeText = document.getElementById('canvasMode');
+            if (modeText) {
+                modeText.textContent = 'Haz clic sobre una presa para tomar su color';
+            }
+            if (canvas) {
+                canvas.style.cursor = 'crosshair';
+            }
+        });
+    }
+
+    // Botón para seleccionar el escalador (filtrado de pose)
+    const climberPickerBtn = document.getElementById('climberPickerBtn');
+    if (climberPickerBtn) {
+        climberPickerBtn.addEventListener('click', () => {
+            climberPickMode = true;
+            colorPickMode = false;
+            roiMode = false;
+            const useRoiCheckbox = document.getElementById('useRoiCheckbox');
+            if (useRoiCheckbox) {
+                useRoiCheckbox.checked = false;
+            }
+            const modeText = document.getElementById('canvasMode');
+            if (modeText) {
+                modeText.textContent = 'Haz clic en el escalador para filtrar la pose';
+            }
+            if (canvas) {
+                canvas.style.cursor = 'crosshair';
+            }
+        });
+    }
+
+    const clearClimberSelectionBtn = document.getElementById('clearClimberSelectionBtn');
+    if (clearClimberSelectionBtn) {
+        clearClimberSelectionBtn.addEventListener('click', () => {
+            climberSelection = null;
+            climberPickMode = false;
+            const modeText = document.getElementById('canvasMode');
+            if (modeText) {
+                modeText.textContent = roiMode ? 'Arrastra para seleccionar ROI' : 'Haz clic para añadir presas';
+            }
+            if (canvas) {
+                canvas.style.cursor = 'default';
+            }
+            updateRoiInfo();
+        });
+    }
+
+    const climberRadiusSlider = document.getElementById('climberSelectionRadius');
+    const climberRadiusValueEl = document.getElementById('climberRadiusValue');
+    if (climberRadiusSlider && climberRadiusValueEl) {
+        climberRadiusSlider.addEventListener('input', (e) => {
+            climberRadiusValueEl.textContent = e.target.value;
+            climberSelectionRadius = parseInt(e.target.value);
         });
     }
 }
@@ -671,46 +846,85 @@ function setupHoldDetectionButtons(videoId, climberWeight, originalFile) {
  */
 async function detectHoldsWithThresholds(videoId) {
     try {
-        const hsv1 = {
-            lower: [
-                parseInt(document.getElementById('h1Min').value),
-                parseInt(document.getElementById('s1Min').value),
-                parseInt(document.getElementById('v1Min').value)
-            ],
-            upper: [
-                parseInt(document.getElementById('h1Max').value),
-                parseInt(document.getElementById('s1Max').value),
-                parseInt(document.getElementById('v1Max').value)
-            ]
-        };
-        
-        const hsv2 = {
-            lower: [
-                parseInt(document.getElementById('h2Min').value),
-                parseInt(document.getElementById('s2Min').value),
-                parseInt(document.getElementById('v2Min').value)
-            ],
-            upper: [
-                parseInt(document.getElementById('h2Max').value),
-                parseInt(document.getElementById('s2Max').value),
-                parseInt(document.getElementById('v2Max').value)
-            ]
-        };
-        
+        let hsv1;
+        let hsv2;
+
+        // Si el usuario ha usado el "gotero", generamos los umbrales HSV automáticamente
+        if (pickedColorHsv) {
+            const tolSlider = document.getElementById('colorTolerance');
+            const tol = tolSlider ? parseInt(tolSlider.value) : 20;
+            const { h, s, v } = pickedColorHsv;
+
+            const dh = Math.max(5, tol);
+            const ds = Math.max(20, tol * 2);
+            const dv = Math.max(20, tol * 2);
+
+            const lowH = Math.max(0, h - dh);
+            const highH = Math.min(179, h + dh);
+            const lowS = Math.max(0, s - ds);
+            const highS = Math.min(255, s + ds);
+            const lowV = Math.max(0, v - dv);
+            const highV = Math.min(255, v + dv);
+
+            hsv1 = {
+                lower: [lowH, lowS, lowV],
+                upper: [highH, highS, highV]
+            };
+            // Segundo rango se mantiene por compatibilidad, pero igual al primero en modo simple
+            hsv2 = {
+                lower: [lowH, lowS, lowV],
+                upper: [highH, highS, highV]
+            };
+        } else {
+            // Modo avanzado: usar los sliders HSV existentes
+            hsv1 = {
+                lower: [
+                    parseInt(document.getElementById('h1Min').value),
+                    parseInt(document.getElementById('s1Min').value),
+                    parseInt(document.getElementById('v1Min').value)
+                ],
+                upper: [
+                    parseInt(document.getElementById('h1Max').value),
+                    parseInt(document.getElementById('s1Max').value),
+                    parseInt(document.getElementById('v1Max').value)
+                ]
+            };
+            
+            hsv2 = {
+                lower: [
+                    parseInt(document.getElementById('h2Min').value),
+                    parseInt(document.getElementById('s2Min').value),
+                    parseInt(document.getElementById('v2Min').value)
+                ],
+                upper: [
+                    parseInt(document.getElementById('h2Max').value),
+                    parseInt(document.getElementById('s2Max').value),
+                    parseInt(document.getElementById('v2Max').value)
+                ]
+            };
+        }
+
         const minArea = parseInt(document.getElementById('minArea').value);
         
+        const body = {
+            lower_hsv1: hsv1.lower,
+            upper_hsv1: hsv1.upper,
+            lower_hsv2: hsv2.lower,
+            upper_hsv2: hsv2.upper,
+            min_area: minArea
+        };
+
+        // Si el usuario seleccionó un ROI, limitamos la detección de presas a esa región.
+        if (currentRoi) {
+            body.roi = [currentRoi.x, currentRoi.y, currentRoi.width, currentRoi.height];
+        }
+
         const response = await fetch(`${API_BASE_URL}/detect-holds/${videoId}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                lower_hsv1: hsv1.lower,
-                upper_hsv1: hsv1.upper,
-                lower_hsv2: hsv2.lower,
-                upper_hsv2: hsv2.upper,
-                min_area: minArea
-            })
+            body: JSON.stringify(body)
         });
         
         if (!response.ok) {
@@ -734,19 +948,39 @@ function drawHoldsOnCanvas() {
         console.error('Canvas, context, or image not available');
         return;
     }
+
+    ensureCanvasDisplaySize();
     
     // Clear canvas first
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Redraw image - ensure it's loaded
     if (firstFrameImage.complete && firstFrameImage.naturalWidth > 0) {
-        ctx.drawImage(firstFrameImage, 0, 0, imageWidth, imageHeight);
+        if (isRoiCropActive()) {
+            // Vista de edición: el canvas se redimensiona al ROI y pintamos 1:1 el recorte.
+            ctx.drawImage(
+                firstFrameImage,
+                currentRoi.x, currentRoi.y, currentRoi.width, currentRoi.height, // source rect
+                0, 0, canvas.width, canvas.height // destination rect
+            );
+        } else {
+            ctx.drawImage(firstFrameImage, 0, 0, imageWidth, imageHeight);
+        }
     } else {
         console.warn('Image not ready, waiting...');
         // If image isn't ready, wait a bit and try again
         setTimeout(() => {
             if (firstFrameImage.complete) {
-                ctx.drawImage(firstFrameImage, 0, 0, imageWidth, imageHeight);
+                ensureCanvasDisplaySize();
+                if (isRoiCropActive()) {
+                    ctx.drawImage(
+                        firstFrameImage,
+                        currentRoi.x, currentRoi.y, currentRoi.width, currentRoi.height,
+                        0, 0, canvas.width, canvas.height
+                    );
+                } else {
+                    ctx.drawImage(firstFrameImage, 0, 0, imageWidth, imageHeight);
+                }
                 drawOverlays();
             }
         }, 50);
@@ -766,29 +1000,59 @@ function drawOverlays() {
     }
     
     console.log('Drawing overlays - ROI:', currentRoi, 'Holds:', currentHolds ? currentHolds.length : 0);
-    
-    // Draw ROI if exists - only border, no fill
-    if (currentRoi) {
-        ctx.strokeStyle = 'yellow';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([]); // Solid line
-        ctx.strokeRect(currentRoi.x, currentRoi.y, currentRoi.width, currentRoi.height);
-        
-        // Draw ROI label
-        ctx.fillStyle = 'yellow';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText('ROI', currentRoi.x + 5, currentRoi.y + 5);
+
+    const cropActive = isRoiCropActive();
+    const offsetX = cropActive ? currentRoi.x : 0;
+    const offsetY = cropActive ? currentRoi.y : 0;
+
+    const roiInfo = currentRoi ? ` | ROI: ${currentRoi.width}x${currentRoi.height}` : '';
+    let finishInfo = '';
+    let finishDisplayNumber = null;
+
+    const holdsArray = currentHolds || [];
+    const holdsWithMeta = holdsArray.map((hold, idx) => ({ hold, idx }));
+    // Orden: de abajo (y más grande) a arriba (y más pequeño)
+    holdsWithMeta.sort((a, b) => b.hold[1] - a.hold[1]);
+
+    if (finishHoldIndex !== null && finishHoldIndex >= 0 && finishHoldIndex < holdsArray.length) {
+        const finishMeta = holdsWithMeta.find(h => h.idx === finishHoldIndex);
+        if (finishMeta) {
+            finishDisplayNumber = holdsWithMeta.indexOf(finishMeta) + 1;
+            finishInfo = ` | Presa FIN: ${finishDisplayNumber}`;
+        }
+    }
+
+    const holdsCountEl = document.getElementById('holdsCount');
+    if (holdsCountEl) {
+        holdsCountEl.textContent = `Presas detectadas: ${holdsArray.length}${roiInfo}${finishInfo}`;
+    }
+
+    // Mientras se selecciona ROI (roiMode=true) mostramos un "recorte" visual
+    // oscureciendo el resto de la imagen (sin caja amarilla).
+    if (roiMode) {
+        const previewRoi = tempRoi || currentRoi;
+        if (previewRoi) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Deja visible únicamente la región ROI
+            ctx.clearRect(previewRoi.x, previewRoi.y, previewRoi.width, previewRoi.height);
+            ctx.restore();
+        }
+        return;
     }
     
     // Draw holds
-    if (!currentHolds || currentHolds.length === 0) {
+    if (!holdsArray || holdsArray.length === 0) {
         console.log('No holds to draw');
     }
-    (currentHolds || []).forEach((hold, index) => {
-        const [x, y] = hold;
-        const isFinishHold = finishHoldIndex === index;
+    holdsWithMeta.forEach((item, displayIdx) => {
+        const [x, y] = item.hold;
+        const originalIndex = item.idx;
+        const displayNumber = displayIdx + 1;
+        const dx = x - offsetX;
+        const dy = y - offsetY;
+        const isFinishHold = finishHoldIndex === originalIndex;
         
         // Draw circle - different color for finish hold
         // Check if hold is being touched (for video overlay, this would be checked per frame)
@@ -801,7 +1065,7 @@ function drawOverlays() {
             ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
         }
         ctx.beginPath();
-        ctx.arc(x, y, 15, 0, 2 * Math.PI);
+        ctx.arc(dx, dy, 15, 0, 2 * Math.PI);
         ctx.fill();
         
         // Draw border - thicker for finish hold
@@ -819,7 +1083,7 @@ function drawOverlays() {
         ctx.font = 'bold 14px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText((index + 1).toString(), x, y);
+        ctx.fillText(displayNumber.toString(), dx, dy);
         
         // Draw "FIN" label for finish hold
         if (isFinishHold) {
@@ -827,17 +1091,11 @@ function drawOverlays() {
             ctx.font = 'bold 12px Arial';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            ctx.fillText('FIN', x, y + 20);
+            ctx.fillText('FIN', dx, dy + 20);
         }
     });
     
-    // Update count
-    const roiInfo = currentRoi ? ` | ROI: ${currentRoi.width}x${currentRoi.height}` : '';
-    const finishInfo = finishHoldIndex !== null ? ` | Presa FIN: ${finishHoldIndex + 1}` : '';
-    const holdsCountEl = document.getElementById('holdsCount');
-    if (holdsCountEl) {
-        holdsCountEl.textContent = `Presas detectadas: ${currentHolds.length}${roiInfo}${finishInfo}`;
-    }
+    // count is updated above
 }
 
 /**
@@ -858,18 +1116,21 @@ function handleCanvasMouseMove(event) {
     if (!roiMode || !roiStart) return;
     
     const coords = getCanvasCoordinates(event);
-    
-    // Draw temporary ROI
+
+    // Preview provisional ROI by rendering (cropped+zoomed) the dragged region.
+    // No yellow rectangle so the user immediately sees the zoomed crop.
+    const x = Math.min(roiStart.x, coords.x);
+    const y = Math.min(roiStart.y, coords.y);
+    const width = Math.abs(coords.x - roiStart.x);
+    const height = Math.abs(coords.y - roiStart.y);
+
+    if (width > 0 && height > 0) {
+        tempRoi = { x, y, width, height };
+    } else {
+        tempRoi = null;
+    }
+
     drawHoldsOnCanvas();
-    
-    // Draw temporary ROI rectangle - only border, no fill
-    ctx.strokeStyle = 'yellow';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([5, 5]); // Dashed line while dragging
-    const width = coords.x - roiStart.x;
-    const height = coords.y - roiStart.y;
-    ctx.strokeRect(roiStart.x, roiStart.y, width, height);
-    ctx.setLineDash([]);
 }
 
 /**
@@ -896,6 +1157,18 @@ function handleCanvasMouseUp(event) {
     }
     
     roiStart = null;
+    tempRoi = null;
+
+    // Al finalizar la selección válida, pasamos automáticamente a modo edición de presas:
+    // el canvas se verá recortado al ROI (sin requerir desmarcar manualmente).
+    if (currentRoi) {
+        roiMode = false;
+        const useRoiCheckbox = document.getElementById('useRoiCheckbox');
+        if (useRoiCheckbox) {
+            useRoiCheckbox.checked = false;
+        }
+    }
+
     drawHoldsOnCanvas();
     updateRoiInfo();
     updateCanvasMode();
@@ -905,11 +1178,51 @@ function handleCanvasMouseUp(event) {
  * Handle canvas click to add/remove hold manually (only when not in ROI mode)
  */
 function handleCanvasClick(event) {
+    const coords = getCanvasCoordinates(event);
+
+    // Modo gotero: tomar color de píxel y no tocar las presas
+    if (colorPickMode) {
+        if (!ctx) return;
+        const pixel = ctx.getImageData(coords.x, coords.y, 1, 1).data; // [r,g,b,a]
+        const [h, s, v] = rgbToHsv(pixel[0], pixel[1], pixel[2]);
+        pickedColorHsv = { h, s, v };
+        colorPickMode = false;
+
+        console.log('Color de presa seleccionado (HSV):', pickedColorHsv);
+
+        const modeText = document.getElementById('canvasMode');
+        if (modeText) {
+            modeText.textContent = 'Haz clic para añadir presas manualmente';
+        }
+        if (canvas) {
+            canvas.style.cursor = 'default';
+        }
+
+        // Lanzar una detección inmediata con el nuevo color
+        if (currentVideoId) {
+            detectHoldsWithThresholds(currentVideoId);
+        }
+        return;
+    }
+
+    // Modo seleccionar escalador: guardamos un punto de referencia para filtrar la pose en análisis
+    if (climberPickMode) {
+        const originalCoords = displayToOriginalCoords(coords.x, coords.y);
+        climberSelection = { x: originalCoords.x, y: originalCoords.y };
+        climberPickMode = false;
+
+        console.log('Escalador seleccionado (px):', climberSelection, 'Radio:', climberSelectionRadius);
+
+        updateCanvasMode();
+        // El usuario probablemente quiere seguir ajustando presas
+        return;
+    }
+
     if (roiMode) return; // ROI mode handles clicks differently
     
-    const coords = getCanvasCoordinates(event);
-    const x = coords.x;
-    const y = coords.y;
+    const originalCoords = displayToOriginalCoords(coords.x, coords.y);
+    const x = originalCoords.x;
+    const y = originalCoords.y;
     
     // Check if clicking on existing hold
     const clickedHoldIndex = currentHolds.findIndex(([hx, hy]) => {
@@ -939,11 +1252,12 @@ function handleCanvasClick(event) {
  * Handle canvas double click to mark/unmark finish hold
  */
 function handleCanvasDoubleClick(event) {
-    if (roiMode) return; // ROI mode doesn't handle double clicks
+    if (roiMode || colorPickMode) return; // ROI mode / gotero no usan doble clic
     
     const coords = getCanvasCoordinates(event);
-    const x = coords.x;
-    const y = coords.y;
+    const originalCoords = displayToOriginalCoords(coords.x, coords.y);
+    const x = originalCoords.x;
+    const y = originalCoords.y;
     
     // Check if double-clicking on existing hold
     const clickedHoldIndex = currentHolds.findIndex(([hx, hy]) => {
@@ -971,6 +1285,16 @@ function updateCanvasMode() {
     const modeText = document.getElementById('canvasMode');
     const useRoiCheckbox = document.getElementById('useRoiCheckbox');
     
+    if (climberPickMode) {
+        if (modeText) {
+            modeText.textContent = 'Haz clic en el escalador para filtrar la pose';
+        }
+        if (canvas) {
+            canvas.style.cursor = 'crosshair';
+        }
+        return;
+    }
+
     if (roiMode && useRoiCheckbox && useRoiCheckbox.checked) {
         modeText.textContent = 'Arrastra para seleccionar la región del escalador (ROI)';
         if (canvas) {
@@ -1025,9 +1349,15 @@ async function confirmAndAnalyze(videoId, climberWeight, originalFile) {
             custom_holds: currentHolds,
             finish_hold_index: finishHoldIndex  // Include finish hold index
         };
+
+        // Añadir selección del escalador (filtra la pose si hay más personas)
+        if (climberSelection) {
+            requestData.climber_point = [climberSelection.x, climberSelection.y];
+            requestData.climber_point_radius = climberSelectionRadius;
+        }
         
         // Add ROI if checkbox is checked and ROI exists
-        if (useRoiCheckbox.checked && currentRoi) {
+        if (currentRoi) {
             requestData.roi = [currentRoi.x, currentRoi.y, currentRoi.width, currentRoi.height];
             console.log('Enviando ROI al backend:', requestData.roi);
         }

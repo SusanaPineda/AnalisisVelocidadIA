@@ -297,15 +297,18 @@ async def detect_holds_custom(
         lower_hsv2 = request_data.get('lower_hsv2', [170, 100, 100])
         upper_hsv2 = request_data.get('upper_hsv2', [180, 255, 255])
         min_area = request_data.get('min_area', 100)
+        roi = request_data.get('roi', None)  # Optional ROI: [x, y, width, height]
         
         hold_detector = HoldDetector()
+        roi_tuple = tuple(roi) if roi and len(roi) == 4 else None
         holds = hold_detector.detect_holds(
             str(filepath),
             lower_hsv1=tuple(lower_hsv1),
             upper_hsv1=tuple(upper_hsv1),
             lower_hsv2=tuple(lower_hsv2),
             upper_hsv2=tuple(upper_hsv2),
-            min_area=min_area
+            min_area=min_area,
+            roi=roi_tuple
         )
         
         return {
@@ -339,6 +342,8 @@ async def analyze_video_with_holds(
         custom_holds = request_data.get('custom_holds', None)
         finish_hold_index = request_data.get('finish_hold_index', None)  # Index of finish hold
         roi = request_data.get('roi', None)  # Optional ROI: [x, y, width, height]
+        climber_point = request_data.get('climber_point', None)  # Optional point [x, y] for selecting climber
+        climber_point_radius = request_data.get('climber_point_radius', 80.0)
         
         # Initialize components
         hold_detector = HoldDetector()
@@ -351,7 +356,8 @@ async def analyze_video_with_holds(
             print(f"Using {len(holds)} custom holds: {holds}")
         else:
             # Detect holds in first frame
-            holds = hold_detector.detect_holds(str(filepath))
+            roi_tuple_for_holds = tuple(roi) if roi and len(roi) == 4 else None
+            holds = hold_detector.detect_holds(str(filepath), roi=roi_tuple_for_holds)
             print(f"Detected {len(holds)} holds: {holds}")
         
         # Process video and track pose
@@ -359,8 +365,17 @@ async def analyze_video_with_holds(
         roi_tuple = tuple(roi) if roi and len(roi) == 4 else None
         if roi_tuple:
             print(f"Using ROI for pose detection: {roi_tuple}")
-        
-        frames_data, fps = pose_tracker.process_video(str(filepath), roi=roi_tuple)
+
+        climber_point_tuple = tuple(climber_point) if climber_point and len(climber_point) == 2 else None
+        if climber_point_tuple:
+            print(f"Using climber selection point: {climber_point_tuple} (radius={climber_point_radius}px)")
+
+        frames_data, fps = pose_tracker.process_video(
+            str(filepath),
+            roi=roi_tuple,
+            climber_point=climber_point_tuple,
+            climber_radius=climber_point_radius
+        )
         print(f"Processed {len(frames_data)} frames at {fps} fps")
         
         # Get video dimensions for coordinate conversion
